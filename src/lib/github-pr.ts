@@ -1,0 +1,290 @@
+import { Octokit } from "octokit";
+import type { Finding, FixPatch } from "./types";
+
+export interface CreatePrResult {
+  prUrl: string;
+  prNumber: number;
+  branch: string;
+  filesChanged: string[];
+  applied: string[];
+  notes: string[];
+}
+
+function sanitizeId(id: string) {
+  return id.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
+}
+
+async function putFile(
+  octokit: Octokit,
+  opts: {
+    owner: string;
+    repo: string;
+    branch: string;
+    path: string;
+    content: string;
+    message: string;
+  },
+): Promise<void> {
+  let sha: string | undefined;
+  try {
+    const { data } = await octokit.rest.repos.getContent({
+      owner: opts.owner,
+      repo: opts.repo,
+      path: opts.path,
+      ref: opts.branch,
+    });
+    if (!Array.isArray(data) && data.type === "file") sha = data.sha;
+  } catch {
+    /* new file */
+  }
+
+  await octokit.rest.repos.createOrUpdateFileContents({
+    owner: opts.owner,
+    repo: opts.repo,
+    path: opts.path,
+    message: opts.message,
+    content: Buffer.from(opts.content, "utf8").toString("base64"),
+    branch: opts.branch,
+    sha,
+  });
+}
+
+/**
+ * Fast, reliable PR creation:
+ * - branch + patch docs + summary (always)
+ * - optional .gitignore bump for env-related patches
+ * Avoids full-tree blob fetch (was timing out / failing on Vercel).
+ */
+export async function createFixPullRequest(opts: {
+  token: string;
+  owner: string;
+  repo: string;
+  patches: FixPatch[];
+  findings: Finding[];
+  scoreLabel?: string;
+}): Promise<CreatePrResult> {
+  const { token, owner, repo, patches, findings } = opts;
+  if (!patches.length) throw new Error("Select at least one patch.");
+
+  const octokit = new Octokit({ auth: token, userAgent: "ShipCheck" });
+  const notes: string[] = [];
+  const applied = patches.map((p) => p.title);
+  const filesChanged: string[] = [];
+
+  // ── Access ──────────────────────────────────────────
+  let base = "main";
+  try {
+    const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
+    base = repoData.default_branch;
+    const perms = repoData.permissions;
+    if (perms && perms.push === false && perms.admin === false) {
+      throw new Error(
+        `No write access to ${owner}/${repo}. Scan a repo you own (look for “PR ready”).`,
+      );
+    }
+  } catch (e) {
+    if (e instanceof Error && /write access|No write/i.test(e.message)) throw e;
+    const msg = e instanceof Error ? e.message : "access failed";
+    throw new Error(
+      `Cannot access ${owner}/${repo}: ${msg}. Re-connect GitHub with repo scope.`,
+    );
+  }
+
+  // ── Branch ──────────────────────────────────────────
+  const { data: refData } = await octokit.rest.git.getRef({
+    owner,
+    repo,
+    ref: `heads/${base}`,
+  });
+  const branch = `shipcheck/fix-${Date.now().toString(36)}`;
+  await octokit.rest.git.createRef({
+    owner,
+    repo,
+    ref: `refs/heads/${branch}`,
+    sha: refData.object.sha,
+  });
+
+  // ── Optional: ensure .env is gitignored ─────────────
+  const wantsGitignore = patches.some(
+    (p) =>
+      p.language === "gitignore" ||
+      /gitignore|\.env/i.test(p.code) ||
+      /env|gitignore/i.test(
+        findings.find((f) => f.id === p.findingId)?.ruleId ?? "",
+      ),
+  );
+
+  if (wantsGitignore) {
+    try {
+      let existing = "";
+      let sha: string | undefined;
+      try {
+        const { data } = await octokit.rest.repos.getContent({
+          owner,
+          repo,
+          path: ".gitignore",
+          ref: branch,
+        });
+        if (!Array.isArray(data) && data.type === "file" && data.content) {
+          existing = Buffer.from(data.content, "base64").toString("utf8");
+          sha = data.sha;
+        }
+      } catch {
+        /* no .gitignore yet */
+      }
+
+      if (!/(^|\n)\.env(\n|$)/.test(existing)) {
+        const next =
+          existing.trimEnd() +
+          "\n\n# ShipCheck\n.env\n.env.local\n.env*.local\n";
+        await octokit.rest.repos.createOrUpdateFileContents({
+          owner,
+          repo,
+          path: ".gitignore",
+          message: "shipcheck: ignore env files",
+          content: Buffer.from(next, "utf8").toString("base64"),
+          branch,
+          sha,
+        });
+        filesChanged.push(".gitignore");
+        notes.push("Updated .gitignore for .env files");
+      } else {
+        notes.push(".gitignore already covers .env");
+      }
+    } catch (e) {
+      notes.push(
+        `Could not update .gitignore: ${e instanceof Error ? e.message : "error"}`,
+      );
+    }
+  }
+
+  // ── Patch docs (always — PR is never empty) ─────────
+  for (const p of patches) {
+    const path = `.shipcheck/patches/${sanitizeId(p.findingId)}.md`;
+    const content = [
+      `# ${p.title}`,
+      ``,
+      p.explanation,
+      ``,
+      findings.find((f) => f.id === p.findingId)?.file
+        ? `**File:** \`${findings.find((f) => f.id === p.findingId)?.file}\``
+        : "",
+      ``,
+      "```" + (p.language || "text"),
+      p.code,
+      "```",
+      ``,
+      `_Generated by ShipCheck — review before merge._`,
+      ``,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    try {
+      await putFile(octokit, {
+        owner,
+        repo,
+        branch,
+        path,
+        content,
+        message: `shipcheck: patch ${p.title.slice(0, 60)}`,
+      });
+      filesChanged.push(path);
+    } catch (e) {
+      notes.push(
+        `Failed ${path}: ${e instanceof Error ? e.message : "write error"}`,
+      );
+    }
+  }
+
+  const summaryPath = ".shipcheck/PR_SUMMARY.md";
+  const summaryBody = [
+    `# ShipCheck fix PR`,
+    ``,
+    opts.scoreLabel ? `**Baseline:** ${opts.scoreLabel}` : "",
+    ``,
+    `## Patches`,
+    ...applied.map((a) => `- ${a}`),
+    ``,
+    `## Notes`,
+    ...(notes.length ? notes.map((n) => `- ${n}`) : ["- Review patch files under `.shipcheck/patches/`"]),
+    ``,
+    `Run your app tests before merging.`,
+    ``,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    await putFile(octokit, {
+      owner,
+      repo,
+      branch,
+      path: summaryPath,
+      content: summaryBody,
+      message: "shipcheck: PR summary",
+    });
+    filesChanged.push(summaryPath);
+  } catch (e) {
+    notes.push(
+      `Summary write failed: ${e instanceof Error ? e.message : "error"}`,
+    );
+  }
+
+  if (filesChanged.length === 0) {
+    throw new Error(
+      "Could not write any files. Check that you have write access to this repo.",
+    );
+  }
+
+  // ── Open PR ─────────────────────────────────────────
+  const title = `ShipCheck: production readiness fixes (${patches.length})`;
+  const body = [
+    `## ShipCheck automated fixes`,
+    ``,
+    opts.scoreLabel ? `**Baseline ship score:** ${opts.scoreLabel}` : "",
+    ``,
+    `### Included patches`,
+    ...applied.map((a) => `- ${a}`),
+    ``,
+    `### Files changed`,
+    ...filesChanged.map((f) => `- \`${f}\``),
+    ``,
+    notes.length ? `### Notes\n${notes.map((n) => `- ${n}`).join("\n")}` : "",
+    ``,
+    `---`,
+    `Generated by [ShipCheck](https://shipcheck-two.vercel.app). Review before merge.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    const { data: pr } = await octokit.rest.pulls.create({
+      owner,
+      repo,
+      title,
+      head: branch,
+      base,
+      body,
+    });
+
+    return {
+      prUrl: pr.html_url,
+      prNumber: pr.number,
+      branch,
+      filesChanged,
+      applied,
+      notes,
+    };
+  } catch (e) {
+    // Surface Octokit status if present
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyErr = e as any;
+    const detail =
+      anyErr?.response?.data?.message ||
+      (e instanceof Error ? e.message : "PR create failed");
+    throw new Error(
+      `Branch \`${branch}\` was created but PR open failed: ${detail}. Open a PR from that branch on GitHub.`,
+    );
+  }
+}

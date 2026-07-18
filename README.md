@@ -1,36 +1,115 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ShipCheck — AI Ship Gate
 
-## Getting Started
+> **AI helps people ship apps fast. ShipCheck is the AI that decides whether that app is safe enough to ship — and gives the exact, verified path to fix it.**
 
-First, run the development server:
+**Live:** https://shipcheck-two.vercel.app  
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Not a better Snyk clone. An **AI ship gate for vibe-coded products**.
+
+Built for the [OpenAI × NamasteDev Codex Hackathon](https://namastedev.com/hackathon).
+
+---
+
+## One sentence for judges
+
+General security scanners assume you know what a CVE is. **ShipCheck is for the non-technical solo founder shipping AI-generated code who doesn’t.**
+
+---
+
+## Reasoning engine
+
+```text
+Rules find evidence → AI understands the app/stack → attack path + business impact
+→ framework-correct patch → proof-of-fix projection → founder ship decision
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| Step | What you see |
+|------|----------------|
+| Detect | `Detected: Next.js App Router` (+ badges) |
+| Evidence | File + lines + confidence |
+| Attack path | How this gets abused in *this* app |
+| If you ship tonight | Attack story centrepiece |
+| Stack patches | Next vs Express vs CF vs Supabase-aware code |
+| Proof of fix | e.g. F 36 → B 78 (projected after top fixes) |
+| Founder brief | Can we ship? Top risks · effort · copy to co-founder |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Try live (60s)
 
-## Learn More
+1. https://shipcheck-two.vercel.app  
+2. **Connect GitHub** (public + private repos)  
+3. Pick a repo (e.g. **beforesign**) → audit runs  
+4. Report: **Overview** → **Fix & PR** → **Open PR with fixes**  
 
-To learn more about Next.js, take a look at the following resources:
+Fallback without login: paste a public `owner/repo` URL.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Flow
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+Connect GitHub → list repos (public + private) → pick one → scan
+→ report (score, issues, patches) → Open fix PR
+```
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Scoring (consistent)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+**Overall = 50% Security + 30% Production + 20% Best practices**  
+Security weighted highest (largest blast radius).
+
+---
+
+## AI fluency (hackathon)
+
+- **Truth:** deterministic rules + repo evidence (models don’t invent vulns)  
+- **Intelligence:** OpenAI for attack story, stack-aware patches, plain English, founder brief  
+- **Build:** iterated with AI coding agents / Codex-class tooling during the hackathon  
+
+---
+
+## Stack
+
+Next.js 16 · TypeScript · Tailwind · OpenAI · GitHub API · Vercel  
+
+---
+
+## Local
+
+```bash
+cd shipcheck
+cp .env.example .env.local
+# Set OPENAI_API_KEY=...
+# For Open PR: GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET + APP_URL=http://localhost:3000
+# GitHub OAuth App callback: http://localhost:3000/api/github/callback
+npm i && npm run dev
+```
+
+### Vercel env (production Open PR)
+
+| Variable | Notes |
+|----------|--------|
+| `OPENAI_API_KEY` | AI narrative + patches |
+| `GITHUB_CLIENT_ID` | OAuth App |
+| `GITHUB_CLIENT_SECRET` | OAuth App |
+| `APP_URL` | `https://shipcheck-two.vercel.app` (no trailing slash) |
+
+OAuth App **Authorization callback URL** must be:
+
+`https://shipcheck-two.vercel.app/api/github/callback`
+
+---
+
+## Don’t confuse us with
+
+| Them | ShipCheck |
+|------|-----------|
+| CVE DB for security engineers | Ship / don’t ship for founders |
+| Generic rate-limit snippet | Stack-detected, framework-correct patch |
+| Findings list | Attack story + proof of fix + founder brief |
+
+---
+
+## License
+
+MIT

@@ -1,0 +1,14 @@
+# Example Wrangler config for Cloudflare D1 + future OpenNext deploy
+name = "shipcheck"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "shipcheck-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# Optional KV cache for repeated repo scans
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "YOUR_KV_NAMESPACE_ID"
