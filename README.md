@@ -6,7 +6,7 @@
 
 Not a better Snyk clone. An **AI ship gate for vibe-coded products**.
 
-Built for the [OpenAI × NamasteDev Codex Hackathon](https://namastedev.com/hackathon).
+
 
 ---
 
